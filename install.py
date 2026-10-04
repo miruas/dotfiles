@@ -53,6 +53,9 @@ def main():
     shell = stage/'.local/share/dms-custom-ui/1.6.2'
     shutil.copytree(dms/'quickshell', shell, symlinks=False)
     overlay(ROOT/'home', stage, home)
+    demo = stage/'.local/share/dotfiles-demo/demo.py'
+    demo.parent.mkdir(parents=True,exist_ok=True)
+    shutil.copy2(ROOT/'scripts/demo.py',demo)
     for p in (ROOT/'overlays/dms').rglob('*'):
         if not p.is_file():continue
         rel = p.relative_to(ROOT/'overlays/dms')

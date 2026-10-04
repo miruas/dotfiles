@@ -59,3 +59,6 @@ hl.bind("SUPER + CTRL + SHIFT + S", function()
         hl.dispatch(hl.dsp.dpms({ action = "toggle" }))
     end, { timeout = 10, type = "oneshot" })
 end, { allow_input_capture = true })
+
+-- Run the desktop showcase macro.
+cmd("SUPER + ALT + M", "@HOME@/.config/hypr/launch-app.sh @HOME@/.local/bin/dotfiles-demo")
