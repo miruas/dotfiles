@@ -32,7 +32,6 @@ Only `keybinds.lua` is loaded for shortcuts. The shipped `dms/binds.lua` is an u
 | Super + Shift + W | Live wallpaper on/off |
 | Super + Alt + W | Still wallpaper browser |
 | Super + Alt + T | Theme gallery toggle |
-| Super + Alt + M | 20-second desktop showcase |
 | Super + Ctrl + Shift + S | Display power toggle |
 | Audio and media keys | Volume, mute, microphone and playback |
 

@@ -1,48 +1,40 @@
-# Hyprland + Dank dotfiles
+# Hyprland + Dank rice
 
-A compact, keyboard-driven desktop with DankMaterialShell, an animated theme gallery inside Dank Island, linked still/live wallpapers, floating media viewers and optional hardware profiles.
+My Hyprland setup with DankMaterialShell, an animated theme gallery and matching wallpapers.
 
-This repository exports a working desktop configuration as portable templates. Personal paths, wallpaper subscriptions, device identifiers, account data and runtime state have been removed. It does not include wallpaper artwork or compiled applications.
+## Showcase
 
-- Flat mouse acceleration, focus follows the pointer, small window gaps and English session locale.
-- Twelve coordinated palettes: black/white, white/black, purple, yellow, red, blue, green, pink, orange, teal, cream and light lavender.
-- **Super + Alt + T** opens and closes the native animated theme gallery. Settings open as a floating window.
-- Each theme can have a still image and a Steam Wallpaper Engine scene. Still stays still; live stays live when changing themes.
-- RAM source caching and adaptive NVIDIA VRAM prewarming, with automatic release under memory pressure or AI workloads.
-- DMS screenshots copy immediately to the clipboard and open Satty for editing.
-- gThumb views photos, GIFs and videos; an optional **Trim Video** button hands videos to a patched Video Trimmer that plays only the selected interval.
-- An optional Control Center card manages cooling and CPU/GPU performance through a restricted local root bridge.
+https://github.com/user-attachments/assets/2151c0fd-abd3-4091-ad43-17cc03ee7bbd
 
-## Compatibility
+## Features
 
-The exported baseline uses **Hyprland 0.56.2 with Lua configuration**, **DMS 1.6.2**, **Quickshell 0.3.1**, gThumb 3.12.12 and Video Trimmer 26.03.1. It was used on Arch/CachyOS with AMD CPU and NVIDIA GPU. Older Hyprland releases using only `hyprland.conf` cannot load these Lua files. Other versions and hardware require adaptation; this is not a universal installer.
+- Twelve color themes, switched from the native Dank Island gallery.
+- Separate still and live wallpaper links for each theme.
+- Adaptive RAM and NVIDIA VRAM wallpaper caching.
+- Small gaps, flat mouse acceleration and focus follows the pointer.
+- Floating settings and media windows; screenshots copy to the clipboard and open in Satty.
+- Optional cooling and CPU/GPU profiles in Control Center.
 
-Upstream UI and application source revisions are pinned. The repository stores custom overlays and patches rather than an entire fork of each application. Shell/core versions must match. A source pin does not pin system packages.
+## Setup
 
-## Start here
+**Hyprland 0.56.2 (Lua) · DMS 1.6.2 · Quickshell 0.3.1**
 
-Read [installation and rollback](docs/INSTALL.md), then stage the configuration without changing the running desktop:
+[Install instructions and dependencies](docs/INSTALL.md)
 
 ```sh
+# Preview the configuration in a staging directory.
 python3 install.py --stage ./staged-home
-```
 
-Review that directory. To install into your home directory with backups:
-
-```sh
+# Install with backups, using a fresh staging directory.
 python3 install.py --stage ./staged-home-install --apply
 ```
 
-Use a new empty staging directory for each invocation. Installation does not install packages, restart the shell, log you out, enable hardware controls or change global system language. Follow the setup guide for services and optional components.
+## Configuration
 
-## Guides
+[Shortcuts](docs/SHORTCUTS.md) · [Themes and wallpapers](docs/WALLPAPERS.md) · [Media](docs/MEDIA.md) · [Hardware profiles](docs/PROFILE-MANAGER.md) · [Troubleshooting](docs/TROUBLESHOOTING.md)
 
-- [20-second showcase macro](docs/DEMO.md)
-- [Shortcuts and configuration](docs/SHORTCUTS.md)
-- [Themes, wallpaper links and memory policy](docs/WALLPAPERS.md)
-- [Media viewer and selected-range video trimming](docs/MEDIA.md)
-- [Optional cooling and performance profiles](docs/PROFILE-MANAGER.md)
-- [Troubleshooting and privacy](docs/TROUBLESHOOTING.md)
-- [Upstream revisions and licensing](docs/UPSTREAM.md)
+[Upstream projects and licenses](docs/UPSTREAM.md)
 
-Run `python3 scripts/validate.py` before publishing local changes. Never commit generated state, hardware mappings, tokens, Steam contents or application databases.
+---
+
+made by miruas with ❤️

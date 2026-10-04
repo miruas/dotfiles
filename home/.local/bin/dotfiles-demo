@@ -1,2 +1,0 @@
-#!/bin/sh
-exec python3 "$HOME/.local/share/dotfiles-demo/demo.py" "$@"
