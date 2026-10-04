@@ -37,7 +37,7 @@ Use a new empty staging directory for each invocation. Installation does not ins
 
 ## Guides
 
-- [29-second showcase macro](docs/DEMO.md)
+- [20-second showcase macro](docs/DEMO.md)
 - [Shortcuts and configuration](docs/SHORTCUTS.md)
 - [Themes, wallpaper links and memory policy](docs/WALLPAPERS.md)
 - [Media viewer and selected-range video trimming](docs/MEDIA.md)

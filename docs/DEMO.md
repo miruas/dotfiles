@@ -1,39 +1,38 @@
-# 29-second showcase macro
+# Fast 20-second showcase macro
 
-Start GPU Screen Recorder, then press **Super + Alt + M**. Alternatively, run `dotfiles-demo` on the configured desktop, or `python3 scripts/demo.py` from this repository.
+Start GPU Screen Recorder, then press **Super + Alt + M**. The demo starts immediately with no preparation countdown. You can also run `dotfiles-demo` or `python3 scripts/demo.py`. `--dry-run` prints the timeline without changing anything; `--countdown N` adds an optional lead-in. The script does not start a recorder or capture the screen. A lock prevents overlapping runs.
 
-There is a five-second lead-in, followed by 29 seconds of desktop actions. Stop the recording after the showcase. This script does not start a recorder or capture the screen. `--dry-run` prints the timeline without changing anything. Ctrl+C in a terminal cancels and runs restoration. A lock prevents overlapping runs.
-
-The macro opens one normal Alacritty terminal using exactly the launcher and terminal configuration used by **Super + T**, without custom demo panels or a replacement shell. Alongside it, Firefox opens the configured website in a new window containing one tab, and Mission Center opens a separate demo instance. The terminal's colors update with the shell palette. These three application windows are rearranged for the desktop showcase.
-
-## Website setting
-
-The public repository defaults to `https://example.org`. Set your own website locally without committing a personal domain:
-
-```sh
-DOTFILES_DEMO_URL=https://example.org dotfiles-demo
-# Or:
-python3 scripts/demo.py --url https://example.org
-```
-
-The local launcher can also export `DOTFILES_DEMO_URL` before starting the script. Firefox uses the normal profile and opens a new window, so existing browser windows and tabs remain outside cleanup. Mission Center uses a separate application ID to avoid taking over an existing instance. Both applications must be installed.
+## Sequence
 
 | Time | Scene |
 | --- | --- |
-| 0–3 s | Normal terminal, Firefox website and Mission Center tile into place |
-| 3–12 s | Animated theme gallery; purple, yellow, red and blue colors |
-| 12–14 s | Reorder application windows and rotate the split |
-| 14–17 s | Float, center, move and resize Mission Center, then return it to tiling |
-| 17–19 s | Fullscreen Firefox and restore its tiled position |
-| 19–21 s | Floating theme settings |
-| 21–24 s | Cooling and performance card |
-| 24–26 s | Wallpaper picker |
-| 26–29 s | Theme gallery and black/white closing palette |
+| 0–2 s | Workspace 3: normal Super+T terminal, Firefox website and Mission Center |
+| 2–4.7 s | Rapid rearrangement, split, floating, movement, resizing, tiling and fullscreen |
+| 4.7–10.4 s | Workspace 4: animated theme gallery and purple, yellow, red, blue live wallpapers |
+| 10.4–13.4 s | Live wallpaper off using the Super+Shift+W action; black/white and white/black still wallpapers |
+| 13.4–14.2 s | Unobstructed still wallpaper |
+| 14.2–17.4 s | Back to workspace 3: application colors, Control Center and theme/wallpaper settings |
+| 17.4–20 s | Workspace 4: closing black/white palette and clean desktop shot |
 
-The macro uses a free workspace between 91 and 99. It restores the starting theme and workspace, and closes only new recognized demo windows on that workspace. Existing app windows are excluded from cleanup. It does not launch media viewers, screenshot editors or Video Trimmer. The cooling card is shown without changing hardware profiles.
+Workspace 4 must be empty so application windows do not cover the wallpapers. Existing windows are never closed by cleanup. Only newly opened demo windows on workspaces 3/4 are tracked. The macro restores the starting theme, workspace, live on/off mode and exact theme-link settings after the sequence. Ctrl+C from a terminal also runs restoration. Restoration takes place outside the 20-second recording sequence.
 
-For live transitions, enable live mode beforehand with **Super + Shift + W**, link the demo palettes to your own scenes and open the theme gallery long enough for eligible caches to warm. The macro retains the starting still/live mode. Scenes not already prepared may load more slowly; a pending theme change causes the next preset to be skipped rather than overlapping changes. Restoration is outside the 29-second recording sequence.
+## Wallpaper setup
 
-The normal terminal prompt, Mission Center process list, browser UI, wallpaper titles and device labels may appear in your recording. Review the video before publishing it. Use the native customized Dank Island shell from this repository. Window choreography uses the [Hyprland Lua dispatcher API](https://wiki.hypr.land/configuring/code-snippets/). Commands and app identifiers can differ on other versions.
+Link live scenes for **purple**, **yellow**, **red** and **blue**, plus still images for **black-white** and **white-black** through the theme settings. Install the patched wallpaper engine and enable its plugin. The macro temporarily enables **Change Wallpaper With Theme**, starts live mode behind the application scene, then turns it off before the monochrome palettes. It restores the previous setting and live mode afterward.
 
-A local rehearsal verified the normal terminal, Firefox and Mission Center on the same demo workspace, Mission Center floating, preservation of existing windows, cleanup of new windows, and restoration of the starting theme/workspace. No screen capture was used for verification.
+No countdown or separate preparation step is required. Cached scenes transition fastest; loading a scene for the first time or a released GPU cache can delay a transition. Theme submission retries briefly instead of overlapping busy requests. Without linked wallpaper content, changing the palette cannot demonstrate a wallpaper change.
+
+## Applications and website
+
+Alacritty uses the same launcher and terminal configuration as Super+T, without custom demo text. Firefox opens a new window containing one website tab. Mission Center uses a separate demo application ID. Windows that appear on another workspace are moved to workspace 3 before choreography begins. Existing Firefox windows and tabs remain outside cleanup.
+
+The public repository defaults to `https://example.org`. Configure a website locally using `DOTFILES_DEMO_URL` or `--url`, without committing a personal domain:
+
+```sh
+DOTFILES_DEMO_URL=https://example.org dotfiles-demo
+python3 scripts/demo.py --url https://example.org
+```
+
+The normal terminal prompt, Mission Center process list, browser UI, wallpaper titles and device labels can appear in the recording. Review it before publishing. No media viewer, screenshot editor or Video Trimmer is launched. The hardware card is shown without changing fan or performance profiles.
+
+A local rehearsal verified workspace 4 with a yellow palette and live mode on during the color sequence, white/black with live mode off during the monochrome sequence, preservation of original windows, cleanup of new windows, and exact restoration of theme-link settings plus the starting theme/workspace. No screen capture was used.
