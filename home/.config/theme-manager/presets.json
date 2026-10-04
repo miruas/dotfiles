@@ -1,0 +1,146 @@
+[
+  {
+    "id": "purple",
+    "name": "Purple",
+    "description": "Soft violet",
+    "light": false,
+    "colors": [
+      "#141218",
+      "#2b292f",
+      "#D0BCFF",
+      "#e6e0e9"
+    ]
+  },
+  {
+    "id": "yellow",
+    "name": "Pastel Yellow",
+    "description": "Warm & mellow",
+    "light": false,
+    "colors": [
+      "#17130b",
+      "#2e2921",
+      "#F4DF8D",
+      "#ebe1d4"
+    ]
+  },
+  {
+    "id": "black-white",
+    "name": "Black / White",
+    "description": "Clean monochrome",
+    "light": false,
+    "colors": [
+      "#101010",
+      "#292929",
+      "#EEEEEE",
+      "#EFEFEF"
+    ]
+  },
+  {
+    "id": "white-black",
+    "name": "White / Black",
+    "description": "Bright monochrome",
+    "light": true,
+    "colors": [
+      "#F7F7F7",
+      "#E4E4E4",
+      "#202020",
+      "#181818"
+    ]
+  },
+  {
+    "id": "red",
+    "name": "Crimson",
+    "description": "Deep red",
+    "light": false,
+    "colors": [
+      "#1a1110",
+      "#322826",
+      "#FF9B9B",
+      "#f1dedc"
+    ]
+  },
+  {
+    "id": "blue",
+    "name": "Ocean",
+    "description": "Cool blue",
+    "light": false,
+    "colors": [
+      "#101418",
+      "#272a2f",
+      "#8DBEFF",
+      "#e0e2e8"
+    ]
+  },
+  {
+    "id": "green",
+    "name": "Forest",
+    "description": "Fresh green",
+    "light": false,
+    "colors": [
+      "#10140f",
+      "#272b25",
+      "#A9D7A2",
+      "#e0e4db"
+    ]
+  },
+  {
+    "id": "pink",
+    "name": "Rose",
+    "description": "Soft pink",
+    "light": false,
+    "colors": [
+      "#191112",
+      "#312829",
+      "#F3AFCB",
+      "#f0dee0"
+    ]
+  },
+  {
+    "id": "orange",
+    "name": "Sunset",
+    "description": "Warm orange",
+    "light": false,
+    "colors": [
+      "#1a120e",
+      "#322824",
+      "#FFBD93",
+      "#f0dfd8"
+    ]
+  },
+  {
+    "id": "teal",
+    "name": "Lagoon",
+    "description": "Calm turquoise",
+    "light": false,
+    "colors": [
+      "#101817",
+      "#26312E",
+      "#89D5CC",
+      "#DFEBE8"
+    ]
+  },
+  {
+    "id": "cream",
+    "name": "Cream",
+    "description": "Warm daylight",
+    "light": true,
+    "colors": [
+      "#fff8f2",
+      "#f1e7d9",
+      "#ff8f00",
+      "#1f1b13"
+    ]
+  },
+  {
+    "id": "lavender-light",
+    "name": "Lavender Light",
+    "description": "Soft daylight",
+    "light": true,
+    "colors": [
+      "#fef7ff",
+      "#ece6ee",
+      "#6750A4",
+      "#1d1b20"
+    ]
+  }
+]

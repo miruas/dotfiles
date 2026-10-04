@@ -1,0 +1,18 @@
+#!/usr/bin/python3
+"""Wait for a renderer's mapped Wayland surface. Reads compositor metadata only."""
+import json,os,subprocess,sys,time
+pid=int(sys.argv[1]);env=os.environ.copy()
+if not env.get('HYPRLAND_INSTANCE_SIGNATURE'):
+    try:env['HYPRLAND_INSTANCE_SIGNATURE']=json.loads(subprocess.check_output(['hyprctl','instances','-j'],text=True))[0]['instance']
+    except (OSError,ValueError,IndexError,subprocess.SubprocessError):sys.exit(2)
+deadline=time.monotonic()+15
+while time.monotonic()<deadline:
+    if not os.path.exists('/proc/'+str(pid)):sys.exit(2)
+    try:
+        layers=json.loads(subprocess.check_output(['hyprctl','layers','-j'],text=True,env=env,stderr=subprocess.DEVNULL,timeout=1))
+        if os.path.exists(env.get('XDG_RUNTIME_DIR','/run/user/'+str(os.getuid()))+'/lwe-ready-'+str(pid)) and any(int(layer.get('pid',0))==pid and layer.get('namespace')=='linux-wallpaperengine' and layer.get('w',0)>0 and layer.get('h',0)>0 for output in layers.values() for level in output.get('levels',{}).values() for layer in level):
+            # Let the committed first frame reach the display before retiring the old surface.
+            time.sleep(.04);sys.exit(0)
+    except (OSError,ValueError,subprocess.SubprocessError):pass
+    time.sleep(.04)
+sys.exit(2)

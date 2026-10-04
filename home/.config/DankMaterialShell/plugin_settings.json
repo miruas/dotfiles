@@ -1,0 +1,22 @@
+{
+  "linuxWallpaperEngine": {
+    "enabled": false,
+    "namedPlaylists": {
+      "Default": []
+    },
+    "pauseOnPowerSaver": true,
+    "pauseOnBattery": true,
+    "outputSettings": {
+      "*": {
+        "fps": 30,
+        "silent": true,
+        "noAudioProcessing": true,
+        "noFullscreenPause": false
+      }
+    },
+    "pickerScrollPositions": {},
+    "monitorScenes": {},
+    "activeType": "scene",
+    "wallpaperModeOn": false
+  }
+}

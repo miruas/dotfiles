@@ -1,0 +1,452 @@
+#!/usr/bin/python3
+import sys, json, subprocess, threading, time
+from pathlib import Path
+HOME=Path.home()
+ROOT=HOME/'.config/theme-manager'
+PRESETS=json.loads((ROOT/'presets.json').read_text())
+BY_ID={p['id']:p for p in PRESETS}
+CONFIG=ROOT/'settings.json'
+
+def load_settings():
+    try: data=json.loads(CONFIG.read_text())
+    except FileNotFoundError: data={}
+    links={}
+    for name,link in data.get('wallpapers',{}).items():
+        if link.get('type')=='image':link={'image':{'path':link['path']}}
+        elif link.get('type')=='live':link={'live':{'sceneId':link['sceneId'],'title':link.get('title','')}}
+        links[name]=link
+    data.update(schemaVersion=2,changeWallpaperWithTheme=bool(data.get('changeWallpaperWithTheme',False)),wallpapers=links)
+    return data
+
+def save_settings(data):
+    temporary=CONFIG.with_suffix('.tmp')
+    temporary.write_text(json.dumps(data,indent=2)+'\n')
+    temporary.replace(CONFIG)
+
+def ipc(target,action,*args):
+    result=subprocess.run(['dms','ipc','call',target,action,*args],capture_output=True,text=True,timeout=15)
+    reply=result.stdout.strip()
+    if result.returncode or reply.startswith('ERROR') or 'FAILED' in reply or 'NOT_FOUND' in reply or reply in ['Function not found.', 'Target not found.']:
+        raise RuntimeError(result.stderr.strip() or reply or 'Desktop command failed')
+    return reply
+
+def workshop_items():
+    folders=[HOME/'.local/share/Steam/steamapps/workshop/content/431960',HOME/'.steam/steam/steamapps/workshop/content/431960']
+    try:
+        plugins=json.loads((HOME/'.config/DankMaterialShell/plugin_settings.json').read_text())
+        path=plugins.get('linuxWallpaperEngine',{}).get('backgroundsDir')
+        if path:folders.append(Path(path))
+    except (FileNotFoundError,ValueError):pass
+    found={}
+    for folder in folders:
+        for project in folder.glob('*/project.json'):
+            try:
+                data=json.loads(project.read_text())
+                found[project.parent.name]={'id':project.parent.name,'title':data.get('title',project.parent.name),'path':str(project.parent)}
+            except (OSError,ValueError):continue
+    return sorted(found.values(),key=lambda x:x['title'].lower())
+
+def monitor_names():
+    import os
+    env=os.environ.copy()
+    if not env.get('HYPRLAND_INSTANCE_SIGNATURE'):
+        instances=json.loads(subprocess.check_output(['hyprctl','instances','-j'],text=True))
+        if not instances:raise RuntimeError('Hyprland is not running')
+        env['HYPRLAND_INSTANCE_SIGNATURE']=instances[0]['instance']
+    monitors=json.loads(subprocess.check_output(['hyprctl','monitors','-j'],text=True,env=env))
+    return [m['name'] for m in monitors]
+
+def live_active():
+    if ipc('plugins','status','linuxWallpaperEngine')=='disabled':return False
+    return ipc('linuxWallpaperEngine','status')=='on'
+
+def ensure_live_plugin():
+    if ipc('plugins','status','linuxWallpaperEngine')=='disabled':
+        ipc('plugins','enable','linuxWallpaperEngine')
+    for _ in range(80):
+        try:return ipc('linuxWallpaperEngine','status')
+        except RuntimeError:time.sleep(.1)
+    raise RuntimeError('The live wallpaper plugin could not be loaded')
+
+def apply_wallpaper(name,active=None):
+    settings=load_settings()
+    if not settings['changeWallpaperWithTheme']:return False
+    links=settings['wallpapers'].get(name,{})
+    image=links.get('image',{})
+    live=links.get('live',{})
+    if active is None:active=live_active()
+    if not image and not (active and live):return False
+    monitors=monitor_names();changed=False
+    # Live mode changes only the renderer; still mode changes only the image.
+    if active:
+        if not live.get('sceneId'):return False
+        scene=live['sceneId']
+        if scene not in {item['id'] for item in workshop_items()}:raise RuntimeError('The linked live wallpaper is not installed')
+        for monitor in monitors:
+            for _ in range(50):
+                try:reply=ipc('linuxWallpaperEngine','set',scene,monitor)
+                except RuntimeError:time.sleep(.1);continue
+                if reply.startswith('Set '):break
+                if reply=='Wallpapers are toggled off':return False
+                time.sleep(.1)
+            else:raise RuntimeError('The live wallpaper engine is not ready')
+        return True
+    if image.get('path'):
+        path=Path(image['path']).expanduser()
+        if not path.is_file():raise RuntimeError('The linked image is missing: '+str(path))
+        for monitor in monitors:ipc('wallpaper','setFor',monitor,str(path))
+        return True
+    return False
+
+def toggle_live():
+    try:name=(ROOT/'selected').read_text().strip()
+    except FileNotFoundError:name='purple'
+    loaded=ipc('plugins','status','linuxWallpaperEngine')!='disabled'
+    if loaded and live_active():
+        # Prepare the linked still image while the live renderer covers it.
+        apply_wallpaper(name,False)
+        ipc('plugins','toggle','linuxWallpaperEngine')
+        active=False
+    else:
+        if not loaded:ensure_live_plugin()
+        if not live_active():ipc('plugins','toggle','linuxWallpaperEngine')
+        active=live_active()
+        apply_wallpaper(name,active)
+    ipc('toast','info','Live wallpaper '+('on' if active else 'off'))
+
+def open_live_picker():
+    ensure_live_plugin()
+    if not live_active():ipc('plugins','toggle','linuxWallpaperEngine')
+    ipc('linuxWallpaperEngine','picker')
+
+
+def apply(name,wallpaper_applied=False):
+    if name not in BY_ID: raise ValueError('Unknown theme')
+    preset=BY_ID[name]
+    wallpaper_result={"changed":wallpaper_applied}
+    def update_wallpaper():
+        try:wallpaper_result['changed']=apply_wallpaper(name)
+        except Exception as error:wallpaper_result['error']=error
+    wallpaper_worker=threading.Thread(target=update_wallpaper)
+    if not wallpaper_applied:wallpaper_worker.start()
+    reply=subprocess.run(['dms','ipc','call','theme','preset',name],capture_output=True,text=True,timeout=15)
+    if reply.returncode or 'PRESET_APPLIED' not in reply.stdout:
+        raise RuntimeError(reply.stderr.strip() or reply.stdout.strip() or 'Could not apply theme')
+    expected=preset['colors'][2].lstrip('#').lower()
+    border=HOME/'.config/hypr/dms/colors.lua'
+    scheme=HOME/'.local/share/color-schemes/DankMatugen.colors'
+    terminal=HOME/'.config/alacritty/dank-theme.toml'
+    for _ in range(150):
+        try:
+            if expected in border.read_text().lower() and expected in terminal.read_text().lower() and scheme.exists():
+                break
+        except FileNotFoundError: pass
+        time.sleep(.1)
+    else: raise RuntimeError('Color generation did not finish. Try again.')
+    result=subprocess.run(['plasma-apply-colorscheme','DankMatugen'],capture_output=True,text=True,timeout=15)
+    if result.returncode: raise RuntimeError('Application colors could not be applied: '+result.stderr.strip())
+    (ROOT/'selected').write_text(name+'\n')
+    if not wallpaper_applied:wallpaper_worker.join()
+    if 'error' in wallpaper_result:
+        error=wallpaper_result['error']
+        raise RuntimeError('Theme applied. Wallpaper could not be changed: '+str(error)) from error
+    return wallpaper_result.get('changed',False)
+
+if len(sys.argv) in [3,4] and sys.argv[1]=='--apply':
+    status=ROOT/'apply-status.json'
+    def report(state,message):
+        temporary=status.with_suffix('.tmp');temporary.write_text(json.dumps({'state':state,'message':message,'theme':sys.argv[2],'time':time.time()}));temporary.replace(status)
+    report('running','Applying theme...')
+    try:
+        changed=apply(sys.argv[2],len(sys.argv)==4 and sys.argv[3]=='--wallpaper-applied')
+        report('done',BY_ID[sys.argv[2]]['name']+' theme applied.'+(' Wallpaper updated.' if changed else '')+' Some open apps may need reopening.')
+    except Exception as error:
+        report('error',str(error));print(str(error),file=sys.stderr);sys.exit(1)
+    print('Theme applied: '+sys.argv[2]);sys.exit(0)
+
+if len(sys.argv)==2 and sys.argv[1] in ['--toggle-live','--live-picker']:
+    try:
+        (toggle_live if sys.argv[1]=='--toggle-live' else open_live_picker)()
+    except Exception as error:
+        try:ipc('toast','error',str(error))
+        except Exception:pass
+        print(str(error),file=sys.stderr);sys.exit(1)
+    sys.exit(0)
+
+if __name__=='__main__' and len(sys.argv)==1:
+    ipc('island','toggle','themes');sys.exit(0)
+
+import os
+if os.environ.get('WAYLAND_DISPLAY'):os.environ['GDK_BACKEND']='wayland'
+from ctypes import CDLL
+CDLL('libgtk4-layer-shell.so')
+import gi
+gi.require_version('Gtk','4.0')
+gi.require_version('Gtk4LayerShell','1.0')
+from gi.repository import Gtk,Gdk,GLib,Gio,Gtk4LayerShell as LayerShell
+
+class Manager(Gtk.Application):
+    def __init__(self):
+        super().__init__(application_id='local.dotfiles.ThemeManager')
+        self.busy=False;self.buttons={};self.window=None
+        self.palette_css=Gtk.CssProvider()
+    def do_activate(self):
+        if '--settings' in sys.argv:
+            self.open_settings(None);return
+        if self.window:
+            self.window.close()
+            return
+        self.window=Gtk.ApplicationWindow(application=self,title='Theme Manager')
+        win=self.window;win.set_default_size(690,650)
+        win.set_decorated(False)
+        if LayerShell.is_supported():
+            LayerShell.init_for_window(win)
+            LayerShell.set_namespace(win,'theme-manager:panel')
+            LayerShell.set_layer(win,LayerShell.Layer.OVERLAY)
+            LayerShell.set_anchor(win,LayerShell.Edge.TOP,True)
+            LayerShell.set_exclusive_zone(win,-1)
+            LayerShell.set_keyboard_mode(win,LayerShell.KeyboardMode.ON_DEMAND)
+            try:
+                bars=json.loads((HOME/'.config/DankMaterialShell/settings.json').read_text()).get('barConfigs',[])
+                bar=next((b for b in bars if b.get('enabled',True) and b.get('position',0)==0),{})
+                top=0 if bar.get('attachToScreenEdge',False) else int(bar.get('spacing',4))
+            except (OSError,ValueError):top=4
+            LayerShell.set_margin(win,LayerShell.Edge.TOP,top)
+            # Place the panel on the output the user is currently using.
+            try:
+                import os
+                env=os.environ.copy()
+                if not env.get('HYPRLAND_INSTANCE_SIGNATURE'):
+                    env['HYPRLAND_INSTANCE_SIGNATURE']=json.loads(subprocess.check_output(['hyprctl','instances','-j'],text=True))[0]['instance']
+                outputs=json.loads(subprocess.check_output(['hyprctl','monitors','-j'],text=True,env=env))
+                output=next((o['name'] for o in outputs if o.get('focused')),None)
+                monitors=Gdk.Display.get_default().get_monitors()
+                for i in range(monitors.get_n_items()):
+                    monitor=monitors.get_item(i)
+                    if monitor.get_connector()==output:
+                        LayerShell.set_monitor(win,monitor);break
+            except (OSError,ValueError,KeyError,IndexError,subprocess.SubprocessError):pass
+        win.connect('notify::is-active',self.panel_focus_changed)
+        win.connect('close-request',self.closed)
+        css=Gtk.CssProvider()
+        style='''window {background: transparent; color: #e9ebf2; font-family: "DejaVu Sans"; font-size: 14px; font-weight: 400;}
+.theme-panel {background: #262626; border-radius: 24px; padding: 6px 0 0;}
+.panel-header {padding: 12px 22px 8px;}
+.panel-title {font-weight: 700; font-size: 16px;}
+.panel-header button {border-radius: 16px;}
+.gallery {padding: 20px 26px 22px;}
+.subtitle {color: #b2b8c7; font-size: 13px;}
+button.card {background: #20232d; border: 2px solid transparent; border-radius: 16px; padding: 14px; box-shadow: none; transition: 140ms;}
+button.card:hover {background: #292d39; border-color: #555d72;}
+button.card.selected {border-color: #d0bcff; background: #2d293d;}
+.card-name {font-size: 14px; font-weight: 700;}
+.card-description {font-size: 11px; color: #a7adbd;}
+.preview {border-radius: 9px; min-height: 52px; padding: 8px;}
+.mini-side {border-radius: 4px; min-width: 18px;}
+.mini-window {border-radius: 5px; padding: 6px;}
+.mini-line {border-radius: 3px; min-height: 3px;}
+.swatch {border-radius: 20px; min-width: 13px; min-height: 13px;}
+.mode {font-size: 9px; color: #abb1c0;}
+.status {font-size: 14px; color: #d6dbe6;}
+.separator {background: #303542; min-height: 1px;}
+scrollbar slider {min-width: 6px; min-height: 6px;}
+'''
+        for p in PRESETS:
+            key=p['id'];bg,panel,accent,fg=p['colors']
+            style+=f'.p-{key} {{background: {bg};}} .panel-{key} {{background: {panel};}} .accent-{key} {{background: {accent};}} .fg-{key} {{background: {fg};}}\n'
+        css.load_from_data(style.encode())
+        Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(),css,Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(),self.palette_css,Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION+1)
+        outer=Gtk.Box(orientation=Gtk.Orientation.VERTICAL);outer.add_css_class('theme-panel');win.set_child(outer)
+        header=Gtk.Box(spacing=8);header.add_css_class('panel-header');outer.append(header)
+        title=Gtk.Label(label='Themes',xalign=0);title.add_css_class('panel-title');title.set_hexpand(True);header.append(title)
+        settings_button=Gtk.Button(label='Settings');settings_button.connect('clicked',self.open_settings);header.append(settings_button)
+        close_button=Gtk.Button(icon_name='window-close-symbolic');close_button.set_tooltip_text('Close');close_button.connect('clicked',lambda b:win.close());header.append(close_button)
+        scroll=Gtk.ScrolledWindow();scroll.set_policy(Gtk.PolicyType.NEVER,Gtk.PolicyType.AUTOMATIC);scroll.set_vexpand(True);outer.append(scroll)
+        box=Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=10);box.add_css_class('gallery');scroll.set_child(box)
+        grid=Gtk.Grid(column_spacing=12,row_spacing=12);grid.set_margin_top(0);grid.set_margin_bottom(0);grid.set_column_homogeneous(True);box.append(grid)
+        self.buttons={}
+        for i,p in enumerate(PRESETS):
+            key=p['id'];button=Gtk.Button();button.add_css_class('card')
+            content=Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=7)
+            preview=Gtk.Box(spacing=7);preview.add_css_class('preview');preview.add_css_class('p-'+key)
+            sidebar=Gtk.Box();sidebar.add_css_class('mini-side');sidebar.add_css_class('accent-'+key);preview.append(sidebar)
+            mini=Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=5);mini.set_hexpand(True);mini.add_css_class('mini-window');mini.add_css_class('panel-'+key)
+            for color,width in [('accent',48),('fg',68),('fg',38)]:
+                line=Gtk.Box();line.add_css_class('mini-line');line.add_css_class(color+'-'+key);line.set_size_request(width,3);line.set_halign(Gtk.Align.START);mini.append(line)
+            preview.append(mini);content.append(preview)
+            label=Gtk.Label(label=p['name'],xalign=0);label.add_css_class('card-name');content.append(label)
+            desc=Gtk.Label(label=p['description'],xalign=0);desc.add_css_class('card-description');content.append(desc)
+            dots=Gtk.Box(spacing=5)
+            for color in ['p','panel','accent','fg']:
+                dot=Gtk.Box();dot.add_css_class('swatch');dot.add_css_class(color+'-'+key);dots.append(dot)
+            mode=Gtk.Label(label='LIGHT' if p['light'] else 'DARK');mode.add_css_class('mode');mode.set_hexpand(True);mode.set_halign(Gtk.Align.END);dots.append(mode);content.append(dots)
+            button.set_child(content);button.connect('clicked',self.choose,key);button.set_sensitive(not self.busy);grid.attach(button,i%3,i//3,1,1);self.buttons[key]=button
+        footer=Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=10)
+        footer.set_margin_start(26);footer.set_margin_end(26);footer.set_margin_bottom(20)
+        outer.append(footer);footer.append(Gtk.Separator())
+        self.status=Gtk.Label(xalign=0);self.status.set_wrap(True);self.status.set_max_width_chars(70);self.status.add_css_class('status');footer.append(self.status)
+        hint=Gtk.Label(label='Press Super + Alt + T to open or close. Press Esc to close.',xalign=0);hint.set_wrap(True);hint.add_css_class('subtitle');footer.append(hint)
+        self.refresh()
+        keys=Gtk.EventControllerKey();keys.connect('key-pressed',lambda c,key,code,state: self.escape(key));win.add_controller(keys)
+        win.present()
+        if '--settings' in sys.argv:
+            win.hide();self.open_settings(None)
+    def open_settings(self,button):
+        if getattr(self,'settings_window',None):
+            self.settings_window.present();return
+        win=Gtk.ApplicationWindow(application=self,title='Theme settings')
+        win.add_css_class('theme-settings')
+        if self.window:win.set_transient_for(self.window)
+        preset=BY_ID.get((ROOT/'selected').read_text().strip(),BY_ID['purple'])
+        colors=json.loads((ROOT/(preset['id']+'.json')).read_text())['light' if preset['light'] else 'dark']
+        css=Gtk.CssProvider()
+        css.load_from_data(('window.theme-settings {background: '+colors['surfaceContainerHigh']+'; color: '+colors['surfaceText']+'; font-family: "DejaVu Sans"; font-size: 14px;}').encode())
+        Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(),css,Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        self.settings_css=css
+        self.settings_window=win;win.set_default_size(560,540)
+        win.connect('close-request',lambda w:self.settings_closed())
+        box=Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=16)
+        for side in ['top','bottom','start','end']:getattr(box,'set_margin_'+side)(24)
+        win.set_child(box);box.add_css_class('theme-panel')
+        row=Gtk.Box(spacing=16)
+        label=Gtk.Label(label='Change Wallpaper With Theme',xalign=0);label.set_hexpand(True);row.append(label)
+        toggle=Gtk.Switch();toggle.set_valign(Gtk.Align.CENTER);toggle.set_active(load_settings()['changeWallpaperWithTheme']);row.append(toggle);box.append(row)
+        def toggle_changed(switch,param):
+            data=load_settings();data['changeWallpaperWithTheme']=switch.get_active();save_settings(data)
+        toggle.connect('notify::active',toggle_changed)
+        box.append(Gtk.Separator())
+        theme_row=Gtk.Box(spacing=12);theme_row.append(Gtk.Label(label='Theme',xalign=0))
+        themes=Gtk.DropDown.new_from_strings([p['name'] for p in PRESETS]);themes.set_hexpand(True);theme_row.append(themes);box.append(theme_row)
+        box.append(Gtk.Label(label='Still wallpaper',xalign=0))
+        image_row=Gtk.Box(spacing=10);image_entry=Gtk.Entry();image_entry.set_placeholder_text('No linked image');image_entry.set_hexpand(True);image_row.append(image_entry)
+        browse=Gtk.Button(label='Browse');image_row.append(browse);box.append(image_row)
+        image_actions=Gtk.Box(spacing=10)
+        current_image=Gtk.Button(label='Use current image');image_actions.append(current_image)
+        clear_image=Gtk.Button(label='Remove image');clear_image.connect('clicked',lambda b:image_entry.set_text(''));image_actions.append(clear_image);box.append(image_actions)
+        box.append(Gtk.Separator());box.append(Gtk.Label(label='Live wallpaper (Steam)',xalign=0))
+        items=workshop_items()
+        # Preserve links to temporarily unavailable workshop items until explicitly removed.
+        ids={i['id'] for i in items}
+        for link in load_settings()['wallpapers'].values():
+            saved=link.get('live',{})
+            if saved.get('sceneId') and saved['sceneId'] not in ids:
+                items.append({'id':saved['sceneId'],'title':'Missing: '+saved.get('title',saved['sceneId']),'missing':True});ids.add(saved['sceneId'])
+        live=Gtk.DropDown.new_from_strings(['No linked live wallpaper']+[i['title'][:55]+' ('+i['id']+')' for i in items]);live.set_hexpand(True);box.append(live)
+        current_live=Gtk.Button(label='Use current live wallpaper');box.append(current_live)
+        note=Gtk.Label(xalign=0);note.set_wrap(True);note.set_max_width_chars(55);box.append(note)
+        hint=Gtk.Label(label='Super + Shift + W switches between still and live wallpapers.',xalign=0);hint.set_wrap(True);hint.add_css_class('subtitle');box.append(hint)
+        actions=Gtk.Box(spacing=12);actions.set_halign(Gtk.Align.END)
+        close=Gtk.Button(label='Close');close.connect('clicked',lambda b:win.close());actions.append(close)
+        save=Gtk.Button(label='Save links');save.add_css_class('suggested-action');actions.append(save);box.append(actions)
+        def theme_id():return PRESETS[themes.get_selected()]['id']
+        def show_link(*args):
+            data=load_settings()['wallpapers'].get(theme_id(),{})
+            image_entry.set_text(data.get('image',{}).get('path',''))
+            scene=data.get('live',{}).get('sceneId')
+            live.set_selected(next((j+1 for j,item in enumerate(items) if item['id']==scene),0))
+            note.set_text('Still and live wallpapers are saved separately.')
+        def file_response(dialog,response):
+            if response==Gtk.ResponseType.ACCEPT:
+                path=dialog.get_file().get_path()
+                if path:image_entry.set_text(path)
+            dialog.destroy()
+        def choose_file(button):
+            dialog=Gtk.FileChooserNative.new('Choose an image',win,Gtk.FileChooserAction.OPEN,'Select','Cancel')
+            dialog.set_current_folder(Gio.File.new_for_path('@HOME@/Pictures/Wallpapers'))
+            filt=Gtk.FileFilter();filt.set_name('Images');filt.add_mime_type('image/*');dialog.add_filter(filt)
+            dialog.connect('response',file_response);dialog.show();self.file_dialog=dialog
+        def use_image(button):
+            try:
+                try:path=ipc('wallpaper','get')
+                except RuntimeError:path=ipc('wallpaper','getFor',monitor_names()[0])
+                if not path.startswith('/'):path=ipc('wallpaper','getFor',monitor_names()[0])
+                if not Path(path).is_file():raise RuntimeError('The current wallpaper is not an image file')
+                image_entry.set_text(path);note.set_text('Current image selected. Click Save links.')
+            except Exception as error:note.set_text(str(error))
+        def use_live(button):
+            try:
+                if not live_active():raise RuntimeError('Live wallpaper is off. Press Super + Shift + W to turn it on.')
+                lines=ipc('linuxWallpaperEngine','list').splitlines()
+                scene=next((line.split(': ',1)[1].split()[0] for line in lines if ': ' in line),None)
+                index=next((j+1 for j,item in enumerate(items) if item['id']==scene),None)
+                if index is None:raise RuntimeError('No installed live wallpaper is currently active')
+                live.set_selected(index);note.set_text('Current live wallpaper selected. Click Save links.')
+            except Exception as error:note.set_text(str(error))
+        def save_links(button):
+            data=load_settings();key=theme_id();links={};value=image_entry.get_text().strip()
+            if value:
+                path=Path(value).expanduser()
+                if not path.is_file():note.set_text('Choose an existing image file.');return
+                links['image']={'path':str(path.resolve())}
+            selected=live.get_selected()
+            if selected>0 and selected<=len(items):
+                item=items[selected-1];links['live']={'sceneId':item['id'],'title':item['title'].removeprefix('Missing: ')}
+            if links:data['wallpapers'][key]=links
+            else:data['wallpapers'].pop(key,None)
+            save_settings(data);note.set_text('Wallpaper links saved.' if links else 'Wallpaper links removed.')
+        themes.connect('notify::selected',show_link);browse.connect('clicked',choose_file)
+        current_image.connect('clicked',use_image);current_live.connect('clicked',use_live);save.connect('clicked',save_links)
+        try:active=(ROOT/'selected').read_text().strip()
+        except FileNotFoundError:active='purple'
+        themes.set_selected(next((i for i,p in enumerate(PRESETS) if p['id']==active),0));show_link();win.present()
+
+    def panel_focus_changed(self,win,param):
+        if win.is_active():self.panel_was_active=True
+        elif getattr(self,'panel_was_active',False):
+            GLib.timeout_add(150,self.dismiss_unfocused_panel,win)
+    def dismiss_unfocused_panel(self,win):
+        if self.window is win and not win.is_active() and not getattr(self,'settings_window',None):
+            win.close()
+        return False
+
+    def settings_closed(self):
+        self.settings_window=None
+        if '--settings' in sys.argv and self.window:self.window.close()
+        return False
+
+    def closed(self,win):
+        if getattr(self,'settings_window',None):self.settings_window.close()
+        self.window=None;self.panel_was_active=False
+        return False
+    def escape(self,key):
+        if key==Gdk.KEY_Escape and self.window:
+            self.window.close();return True
+        return False
+    def refresh(self,message=None):
+        try:active=(ROOT/'selected').read_text().strip()
+        except FileNotFoundError:active='purple'
+        preset=BY_ID.get(active,BY_ID['purple'])
+        try:
+            palette=json.loads((ROOT/(preset['id']+'.json')).read_text())['light' if preset['light'] else 'dark']
+            panel=palette['surfaceContainerHigh'];card=palette['surfaceContainer'];fg=palette['surfaceText'];muted=palette['surfaceVariantText'];accent=palette['primary'];outline=palette['outline']
+            self.palette_css.load_from_data(f'''window {{color: {fg};}}
+.theme-panel {{background: {panel};}}
+button.card {{background: {card};}}
+button.card:hover {{border-color: {outline}; background: {panel};}}
+button.card.selected {{border-color: {accent}; background: {panel};}}
+.subtitle, .card-description, .mode {{color: {muted};}}
+.status {{color: {fg};}}
+'''.encode())
+        except (OSError,ValueError,KeyError):pass
+        for name,button in self.buttons.items():
+            if name==active:button.add_css_class('selected')
+            else:button.remove_css_class('selected')
+            button.set_sensitive(not self.busy)
+        self.status.set_text(message or ('Applying theme...' if self.busy else 'Current theme: '+BY_ID.get(active,BY_ID['purple'])['name']+'.'))
+    def choose(self,button,name):
+        if self.busy:return
+        self.busy=True;self.hold();self.refresh()
+        def worker():
+            try:
+                changed=apply(name)
+                message=BY_ID[name]['name']+' theme applied.'+(' Wallpaper updated.' if changed else '')+' Restart apps if their colors have not changed.'
+            except Exception as e:message=str(e)
+            GLib.idle_add(self.finished,message)
+        threading.Thread(target=worker,daemon=True).start()
+    def finished(self,message):
+        self.busy=False
+        if self.window:self.refresh(message)
+        self.release();return False
+if __name__ == '__main__':
+    Manager().run([sys.argv[0]])

@@ -1,0 +1,13 @@
+[Unit]
+Description=Adaptive wallpaper VRAM budget monitor
+PartOf=graphical-session.target
+After=graphical-session.target wallpaper-ram-cache.service
+
+[Service]
+ExecStart=%h/.local/bin/wallpaper-gpu-cache-policy
+Restart=on-failure
+RestartSec=3
+UMask=0077
+
+[Install]
+WantedBy=graphical-session.target

@@ -1,0 +1,17 @@
+[general]
+import = ["@HOME@/.config/alacritty/dank-theme.toml"]
+
+[window]
+padding = { x = 12, y = 12 }
+opacity = 1.0
+[font]
+size = 11.0
+[font.normal]
+family = "Noto Sans Mono"
+
+# Ctrl + mouse wheel changes the terminal font size.
+[mouse]
+bindings = [
+{ mouse = "WheelUp", mods = "Control", action = "IncreaseFontSize" },
+{ mouse = "WheelDown", mods = "Control", action = "DecreaseFontSize" },
+]

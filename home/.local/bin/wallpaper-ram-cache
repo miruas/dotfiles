@@ -1,0 +1,64 @@
+#!/usr/bin/python3
+"""RAM-only source cache. No renderer or GPU context is created."""
+import json,os,shutil,time,signal,sys
+from pathlib import Path
+H=Path.home();ROOT=Path('/dev/shm')/f'wallpaper-ram-cache-{os.getuid()}'
+SETTINGS=H/'.config/theme-manager/settings.json';STATE=H/'.local/state/theme-manager/ram-cache.json'
+ASSETS=H/'.local/share/Steam/steamapps/common/wallpaper_engine/assets'
+WORKSHOP=H/'.local/share/Steam/steamapps/workshop/content/431960'
+ROOT.mkdir(mode=0o700,exist_ok=True);os.chmod(ROOT,0o700);STATE.parent.mkdir(parents=True,exist_ok=True)
+stopping=False;pressure=False
+
+def save(data):
+ tmp=STATE.with_suffix('.tmp');tmp.write_text(json.dumps(data));tmp.replace(STATE)
+def memory_pressure(used, previous):
+ if used > 50_000_000_000:return True
+ if used < 48_000_000_000:return False
+ return previous
+def memory_used():
+ data={line.split(':')[0]:int(line.split()[1])*1024 for line in Path('/proc/meminfo').read_text().splitlines() if line.startswith(('MemTotal:','MemAvailable:'))}
+ return data['MemTotal']-data['MemAvailable']
+def signature(path):
+ return [(str(p.relative_to(path)),p.stat().st_size,p.stat().st_mtime_ns) for p in sorted(path.rglob('*')) if p.is_file()]
+def cache_dir(src,dst):
+ sig=signature(src);marker=dst/'.ram-source.json'
+ if marker.exists() and json.loads(marker.read_text())==[list(x) for x in sig]:return
+ temp=dst.with_name(dst.name+'.loading');shutil.rmtree(temp,ignore_errors=True)
+ shutil.copytree(src,temp,symlinks=False);(temp/'.ram-source.json').write_text(json.dumps(sig))
+ # A ready directory is published only after every file has been copied.
+ shutil.rmtree(dst,ignore_errors=True);temp.rename(dst)
+def clear():
+ save({'mode':'ram-only','ready':{},'assets':'','pressure':pressure,'bytes':0})
+ for child in ROOT.iterdir():
+  if child.is_dir():shutil.rmtree(child)
+def stop(*args):
+ global stopping;stopping=True
+signal.signal(signal.SIGTERM,stop);signal.signal(signal.SIGINT,stop)
+while not stopping:
+ try:
+  used=memory_used()
+  pressure=memory_pressure(used,pressure)
+  config=json.loads(SETTINGS.read_text())
+  if pressure or not config.get('changeWallpaperWithTheme',False):clear()
+  else:
+   ids={str(x.get('live',{}).get('sceneId','')) for x in config.get('wallpapers',{}).values()}
+   ids={x for x in ids if x.isdigit()}
+   ready={};assets=''
+   for sid in sorted(ids):
+    if stopping or memory_used()>50_000_000_000:pressure=True;break
+    src=WORKSHOP/sid
+    if not (src/'project.json').is_file():continue
+    dst=ROOT/sid;cache_dir(src,dst);ready[sid]=str(dst)
+   if pressure:clear()
+   else:
+    if ASSETS.is_dir():cache_dir(ASSETS,ROOT/'assets');assets=str(ROOT/'assets')
+    for child in ROOT.iterdir():
+     if child.name not in ids|{'assets'} and child.is_dir():shutil.rmtree(child)
+    size=sum(p.stat().st_size for p in ROOT.rglob('*') if p.is_file())
+    save({'mode':'ram-only','ready':ready,'assets':assets,'pressure':False,'bytes':size,'memoryUsedGB':round(used/1e9,1)})
+ except Exception as e:
+  print(f'RAM wallpaper cache: {e}',file=sys.stderr,flush=True)
+ for _ in range(25):
+  if stopping:break
+  time.sleep(.2)
+clear()

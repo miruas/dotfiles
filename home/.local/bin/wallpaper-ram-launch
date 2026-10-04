@@ -1,0 +1,18 @@
+#!/usr/bin/python3
+"""Resolve a ready RAM source, fall back to the original workshop source."""
+import json,os,sys
+from pathlib import Path
+args=sys.argv[1:]
+try:
+ state=json.loads((Path.home()/'.local/state/theme-manager/ram-cache.json').read_text())
+ if not state.get('pressure') and '--bg' in args:
+  index=args.index('--bg')+1;sid=Path(args[index]).name;path=state.get('ready',{}).get(sid)
+  if path and (Path(path)/'project.json').is_file():
+   args[index]=path
+   assets=state.get('assets','')
+   if assets and Path(assets).is_dir():
+    if '--assets-dir' in args:args[args.index('--assets-dir')+1]=assets
+    else:args=['--assets-dir',assets]+args
+except (OSError,ValueError,IndexError):pass
+binary=str(Path.home()/'.local/opt/linux-wallpaperengine/linux-wallpaperengine')
+os.execv(binary,[binary]+args)

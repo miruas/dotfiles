@@ -1,0 +1,568 @@
+--- a/LinuxWallpaperEnginePlugin.qml
++++ b/LinuxWallpaperEnginePlugin.qml
+@@ -41,6 +41,95 @@
+     property var playlistIndices: ({})
+     property var pendingLaunches: ({})
+     property var pendingKillers: ({})
++    property var handovers: ({})
++    property bool cacheEnabled: false
++    property bool warming: false
++    property var cacheScenes: []
++    property var cacheRenderers: ({})
++    property var warmQueue: []
++    property int cacheRevision: 0
++    property int cacheSwitches: 0
++    property var cacheSwapTasks: ({})
++    property var warmPending: null
++
++    // RAM sources stay ready; GPU renderers are allowed by the measured VRAM budget.
++    property double cacheRetryAfter: 0
++    readonly property bool cacheResourceBusy: !gpuCacheInfo.allowed || !gpuCacheInfo.time || Date.now()/1000 - gpuCacheInfo.time > 10 || ramCacheInfo.pressure === true
++    property double systemMemoryUsedBytes: 0
++    property string linkedThemeScenes: ""
++    property var ramCacheInfo: ({})
++    FileView {
++        id: ramCacheState
++        path: "@HOME@/.local/state/theme-manager/ram-cache.json"
++        watchChanges: true
++        onFileChanged: reload()
++        onLoaded: { try { root.ramCacheInfo = JSON.parse(text()) } catch (e) {} }
++    }
++    property var gpuCacheInfo: ({})
++    FileView {
++        id: gpuCacheState
++        path: "@HOME@/.local/state/theme-manager/gpu-cache.json"
++        watchChanges: true
++        onFileChanged: reload()
++        onLoaded: { try { root.gpuCacheInfo = JSON.parse(text()) } catch (e) {} }
++    }
++    FileView {
++        id: themeLinks
++        path: "@HOME@/.config/theme-manager/settings.json"
++        watchChanges: true
++        onFileChanged: reload()
++        onLoaded: {
++            try {
++                const config = JSON.parse(text())
++                root.linkedThemeScenes = config.changeWallpaperWithTheme
++                    ? Object.values(config.wallpapers || {}).map(x => x.live?.sceneId).filter(x => x).join(",") : ""
++            } catch (e) { console.warn("Theme cache settings:", e) }
++        }
++    }
++    Timer {
++        interval: 500
++        running: true
++        repeat: true
++        onTriggered: {
++            if (!root.ready || root.cacheResourceBusy || Date.now()/1000 - (root.gpuCacheInfo.time || 0) > 10 || !root.linkedThemeScenes) {
++                if (root.cacheEnabled || root.warming) root.releaseCache()
++                return
++            }
++            if (root.warming || root.cacheSwitches > 0 || Object.keys(root.pendingLaunches).length ||
++                Object.keys(root.handovers).length || !Object.values(root.processes).some(p => p?.processId > 0)) return
++            root.warmScenes(root.linkedThemeScenes)
++        }
++    }
++    property int promotedActivePid: 0
++    Timer {
++        interval: 250
++        running: root.ready
++        repeat: true
++        onTriggered: {
++            if (Object.keys(root.handovers).length) return
++            for (const p of Object.values(root.processes)) {
++                if (p?.processId > 0 && p.processId !== root.promotedActivePid) {
++                    root.promotedActivePid = p.processId
++                    Quickshell.execDetached(["@HOME@/.local/bin/wallpaper-cache-control", "promote", String(p.processId)])
++                }
++            }
++        }
++    }
++    function cancelWarmup() {
++        warming = false
++        warmQueue = []
++        warmPidWait.stop()
++        const pending = warmPending
++        warmPending = null
++        warmPromotion.running = false
++        warmFrameProbe.running = false
++        if (pending) {
++            delete cacheRenderers[cacheKey(pending.outputKey,pending.sceneId)]
++            stopRenderer(pending)
++        }
++        cacheRevision++
++    }
++
+     property var rotationTimers: ({})
+     property var processStartTimes: ({})
+     property var crashCounts: ({})
+@@ -369,7 +458,7 @@
+     // win over "*" by design); span owners write the group's scene and switch
+     // to span mode (the same global-mode switch the settings Span tab makes).
+     // No manual relaunch bookkeeping here: the saves themselves trigger the
+-    // reactive sync chain; stopAllOutputs just kills the old processes now.
++    // reactive sync chain; launchOutput keeps the old surface until its replacement maps.
+     function setSceneForOwner(sceneId, owner) {
+         if (!sceneId) return "ERROR: scene id required"
+         if (!pluginService || !pluginService.savePluginData) return "ERROR: plugin service unavailable"
+@@ -395,7 +484,8 @@
+             saveKey("activeType", "scene")
+         }
+         console.info("LinuxWallpaperEngine: Applying scene", sceneId, "to", target)
+-        stopAllOutputs()
++        syncDebounce.stop()
++        syncScenesWithData()
+         return "OK"
+     }
+ 
+@@ -411,7 +501,8 @@
+         saveKey("monitorScenes", scenes)
+         saveKey("activeType", "scene")
+         console.info("LinuxWallpaperEngine: Applying scene", sceneId, "to all monitors (cleared per-monitor overrides)")
+-        stopAllOutputs()
++        syncDebounce.stop()
++        syncScenesWithData()
+         return "OK"
+     }
+ 
+@@ -731,6 +822,168 @@
+         }
+     }
+ 
++    function cacheKey(key, scene) { return key + "|" + scene }
++    function stopRenderer(proc) {
++        if (!proc) return
++        const pid = proc.processId
++        if (pid > 0) Quickshell.execDetached(["sh", "-c", "kill -TERM \"$1\"; kill -CONT \"$1\"", "sh", String(pid)])
++        proc.running = false
++        proc.destroy()
++    }
++    function cacheReadyCount() {
++        cacheRevision
++        let count = 0
++        for (const scene of cacheScenes) {
++            let found = false
++            for (const key in processes) if (processes[key]?.sceneId === scene) found = true
++            for (const key in cacheRenderers) if (cacheRenderers[key]?.sceneId === scene && cacheRenderers[key]?.cacheReady) found = true
++            if (found) count++
++        }
++        return count
++    }
++    function releaseCache() { cacheRetryAfter = Date.now() + 4000; cacheReleaseTimer.restart() }
++    Timer {
++        id: cacheReleaseTimer
++        interval: 50
++        repeat: false
++        onTriggered: {
++            if (root.cacheSwitches > 0 || Object.keys(root.handovers).length) { restart(); return }
++            root.warming = false
++            root.warmQueue = []
++            warmPidWait.stop()
++            warmPromotion.running = false
++            root.warmPending = null
++            warmFrameProbe.running = false
++            const parked = Object.values(root.cacheRenderers)
++            root.cacheRenderers = ({})
++            for (const proc of parked) root.stopRenderer(proc)
++            const active = Object.values(root.processes).filter(p => p?.processId > 0).map(p => p.processId)
++            if (active.length) Quickshell.execDetached(["@HOME@/.local/bin/wallpaper-cache-control", "promote", active.join(",")])
++            root.cacheEnabled = false
++            root.cacheScenes = []
++            root.cacheRevision++
++        }
++    }
++    function warmScenes(csv) {
++        if (!ready || generateStaticWallpaper || cacheResourceBusy || Date.now() < cacheRetryAfter) return "OFF"
++        if (cacheSwitches > 0 || Object.keys(pendingLaunches).length || Object.keys(handovers).length) return "BUSY"
++        cacheReleaseTimer.stop()
++        const scenes = [...new Set(csv.split(",").filter(x => /^\d+$/.test(x)))]
++        if (!scenes.length || warming) return "NO_CHANGE"
++        cacheEnabled = true
++        cacheScenes = scenes
++        warmQueue = []
++        for (const output of computeOutputs()) {
++            for (const scene of scenes) {
++                const active = processes[output.key]
++                const cached = cacheRenderers[cacheKey(output.key, scene)]
++                if (active?.sceneId === scene || (cached && cached.running && cached.cacheReady)) continue
++                warmQueue.push({output:output, scene:scene})
++            }
++        }
++        if (!warmQueue.length) return "READY"
++        warming = true
++        const pids = Object.values(processes).filter(p => p && p.processId > 0).map(p => p.processId)
++        warmPromotion.command = ["@HOME@/.local/bin/wallpaper-cache-control", "promote", pids.join(",")]
++        warmPromotion.running = true
++        return "PREPARING"
++    }
++    function startNextWarm() {
++        if (!ready || !warming || !warmQueue.length) { warming = false; cacheRevision++; return }
++        const item = warmQueue.shift()
++        const output = item.output
++        const sig = screenArgsForOutput(output)
++        const proc = weProcessComponent.createObject(root, {
++            outputKey: output.key, screenMode: sig.mode, screenValue: sig.value,
++            wallpaperMonitors: output.monitors, sceneId: item.scene,
++            settings: getOutputSettings(output.owner,item.scene), forceNoAudio: false,
++            assetsDir: root.assetsDir, backgroundsDir: root.backgroundsDir,
++            cacheResident: true
++        })
++        warmPending = proc
++        cacheRenderers[cacheKey(output.key, item.scene)] = proc
++        proc.running = true
++        warmPidWait.start()
++    }
++    Process {
++        id: warmPromotion
++        onExited: (code) => {
++            if (code !== 0) { root.warming = false; return }
++            root.startNextWarm()
++        }
++    }
++    Timer {
++        id: warmPidWait
++        interval: 20
++        repeat: true
++        onTriggered: {
++            if (!root.warmPending || !root.ready) { stop(); root.warming=false; return }
++            if (root.warmPending.processId > 0) {
++                stop()
++                warmFrameProbe.command = ["@HOME@/.local/bin/wallpaper-cache-control", "prepare", String(root.warmPending.processId)]
++                warmFrameProbe.running = true
++            }
++        }
++    }
++    Process {
++        id: warmFrameProbe
++        onExited: (code) => {
++            const proc = root.warmPending
++            root.warmPending = null
++            if (proc) {
++                if (code === 0) proc.cacheReady = true
++                else {
++                    delete root.cacheRenderers[root.cacheKey(proc.outputKey,proc.sceneId)]
++                    root.stopRenderer(proc)
++                }
++            }
++            root.cacheRevision++
++            root.startNextWarm()
++        }
++    }
++    Component {
++        id: cachedSwitchComponent
++        Process {
++            property string key: ""
++            property var previous: null
++            property var candidate: null
++            property var output: null
++            property var oldSig: null
++            property bool cancelled: false
++            function cancel() {
++                cancelled = true
++                delete root.cacheSwapTasks[key]
++                root.cacheSwitches--
++                root.stopRenderer(previous)
++                previous = null
++                running = false
++                destroy()
++            }
++            command: ["@HOME@/.local/bin/wallpaper-cache-control", "pair", String(candidate?.processId ?? 0), String(previous?.processId ?? 0)]
++            onExited: (code) => {
++                if (cancelled) return
++                delete root.cacheSwapTasks[key]
++                delete root.pendingLaunches[key]
++                root.cacheSwitches--
++                if (code === 0 && root.ready) {
++                    if (previous) {
++                        previous.cacheReady = true
++                        root.cacheRenderers[root.cacheKey(key,previous.sceneId)] = previous
++                    }
++                    console.info("LinuxWallpaperEngine: Prepared scene selected",candidate?.sceneId)
++                } else if (previous && root.ready) {
++                    root.processes[key] = previous
++                    root.launchSignatures[key] = oldSig
++                    if (candidate) root.cacheRenderers[root.cacheKey(key,candidate.sceneId)] = candidate
++                    Quickshell.execDetached(["@HOME@/.local/bin/wallpaper-cache-control", "promote", String(previous.processId)])
++                }
++                root.cacheRevision++
++                syncDebounce.restart()
++                destroy()
++            }
++        }
++    }
++
+     function launchOutput(output, sceneId, forceNoAudio) {
+         const key = output.key
+ 
+@@ -742,14 +995,49 @@
+             return
+         }
+ 
+-        if (processes[key]) {
+-            processes[key].running = false
+-            processes[key].destroy()
++        // User selection takes priority over speculative loading; avoid duplicate scene engines.
++        if (warming) cancelWarmup()
++        const prepared = cacheRenderers[cacheKey(key,sceneId)]
++        if (cacheEnabled && prepared && prepared.running && prepared.cacheReady &&
++            Utils.deepEqual(prepared.settings || {}, getOutputSettings(output.owner,sceneId) || {})) {
++            const previous = processes[key]
++            const oldSig = launchSignatures[key]
++            delete cacheRenderers[cacheKey(key,sceneId)]
++            processes[key] = prepared
++            launchSignatures[key] = screenArgsForOutput(output)
++            processStartTimes[key] = Date.now()
++            pendingLaunches[key] = true
++            cacheSwitches++
++            const swap = cachedSwitchComponent.createObject(root, {key:key,previous:previous,candidate:prepared,output:output,oldSig:oldSig})
++            cacheSwapTasks[key] = swap
++            swap.running = true
++            return
++        }
++        const old = processes[key]
++        const oldSig = launchSignatures[key] || null
++        const newSig = screenArgsForOutput(output)
++        if (old && old.running && !generateStaticWallpaper && Utils.deepEqual(oldSig || {}, newSig)) {
++            const oldStarted = processStartTimes[key]
++            startOutput(key, output, sceneId, forceNoAudio)
++            const candidate = processes[key]
++            if (!candidate || candidate === old) return
++            pendingLaunches[key] = true
++            const handover = handoverComponent.createObject(root, {
++                outputKey: key, previous: old, candidate: candidate,
++                previousSig: oldSig, previousStarted: oldStarted || Date.now()
++            })
++            handovers[key] = handover
++            handover.running = true
++            return
++        }
++        if (old) {
+             delete processes[key]
+-        }
+-
+-        const oldSig = launchSignatures[key] || null
+-        if (!oldSig) {
++            old.running = false
++            old.destroy()
++        }
++
++        const cleanupSig = oldSig
++        if (!cleanupSig) {
+             startOutput(key, output, sceneId, forceNoAudio)
+             return
+         }
+@@ -757,7 +1045,7 @@
+         pendingLaunches[key] = true
+         const killer = killerComponent.createObject(root, {
+             key: key,
+-            killSig: oldSig,
++            killSig: cleanupSig,
+             startNew: true,
+             output: output,
+             sceneId: sceneId,
+@@ -768,6 +1056,13 @@
+     }
+ 
+     function stopOutput(key) {
++        if (cacheSwapTasks[key]) cacheSwapTasks[key].cancel()
++        if (handovers[key]) handovers[key].cancel()
++        if (pendingKillers[key]) {
++            pendingKillers[key].startNew = false
++            pendingKillers[key].running = false
++            pendingKillers[key].destroy()
++        }
+         // kill by PID, not pkill: a fresh process can reuse the same --screen-root signature and pkill would kill it too
+         if (processes[key]) {
+             const pid = processes[key].processId
+@@ -818,22 +1113,33 @@
+     }
+ 
+     function stopAllOutputs() {
+-        for (const key in processes) {
+-            if (processes[key]) {
+-                processes[key].running = false
+-                processes[key].destroy()
+-            }
+-        }
++        for (const key in cacheSwapTasks) if (cacheSwapTasks[key]) cacheSwapTasks[key].cancel()
++        cacheSwapTasks = ({})
++        warming = false
++        warmQueue = []
++        warmPidWait.stop()
++        warmPromotion.running = false
++        warmFrameProbe.running = false
++        warmPending = null
++        const parked = Object.values(cacheRenderers)
++        cacheRenderers = ({})
++        for (const proc of parked) stopRenderer(proc)
++        cacheRevision++
++        for (const key in handovers) if (handovers[key]) handovers[key].cancel()
++        const keys = Object.keys(processes)
++        for (const key of keys) stopOutput(key)
+         processes = ({})
+-        for (const key in launchSignatures) {
+-            const sig = launchSignatures[key]
+-            if (sig) {
+-                Quickshell.execDetached(["pkill", "-f", Utils.pkillPattern(sig)])
+-            }
+-        }
+         launchSignatures = ({})
+         pendingLaunches = ({})
++        for (const key in pendingKillers) {
++            if (pendingKillers[key]) {
++                pendingKillers[key].startNew = false
++                pendingKillers[key].running = false
++                pendingKillers[key].destroy()
++            }
++        }
+         pendingKillers = ({})
++        handovers = ({})
+         processStartTimes = ({})
+         crashCounts = ({})
+         destroyRotationTimers()
+@@ -893,6 +1199,7 @@
+             syncScenesWithData()
+             console.info("LinuxWallpaperEngine: Toggled ON")
+         }
++        saveKey("wallpaperModeOn", ready)
+     }
+ 
+     function ipcAdvance(monitor, direction) {
+@@ -960,6 +1267,10 @@
+         function randomMonitor(monitor: string): string { return root.ipcAdvance(monitor, 0) }
+         function set(sceneId: string, monitor: string): string { return root.ipcSet(sceneId, monitor) }
+         function list(): string { return root.ipcList() }
++        function status(): string { return root.ready ? "on" : "off" }
++        function prewarm(scenes: string): string { return root.warmScenes(scenes) }
++        function clearCache(): string { root.releaseCache(); return "RELEASING" }
++        function cacheStatus(): string { return JSON.stringify({mode:"adaptive",warming:root.warming,ready:root.cacheReadyCount(),total:root.cacheScenes.length,parked:Object.keys(root.cacheRenderers).length,switches:root.cacheSwitches,cachedPids:Object.values(root.cacheRenderers).filter(p => p?.processId > 0).map(p => p.processId),gpuAllowed:!root.cacheResourceBusy,gpuReason:root.gpuCacheInfo.reason || "Waiting for monitor",ramReady:Object.keys(root.ramCacheInfo.ready || {}).length,ramBytes:root.ramCacheInfo.bytes || 0}) }
+         function picker(): string { return root.openPicker("") }
+         function pickerMonitor(monitor: string): string { return root.openPicker(monitor) }
+         function playlistCreate(name: string): string { return root.createNamedPlaylist(name) }
+@@ -980,6 +1291,8 @@
+         Process {
+             id: weProc
+ 
++            property bool cacheResident: false
++            property bool cacheReady: false
+             property string outputKey: ""
+             property string screenMode: "root"
+             property string screenValue: ""
+@@ -1005,6 +1318,17 @@
+             })
+ 
+             onExited: (code) => {
++                const cachedKey = root.cacheKey(outputKey,sceneId)
++                if (root.cacheRenderers[cachedKey] === weProc) {
++                    delete root.cacheRenderers[cachedKey]
++                    root.cacheRevision++
++                    destroy()
++                    return
++                }
++                if (root.handovers[outputKey] && root.handovers[outputKey].candidate === weProc) {
++                    root.handovers[outputKey].finish(false)
++                    return
++                }
+                 if (code !== 0) {
+                     console.warn("LinuxWallpaperEngine: Process exited with code:", code, "for scene", sceneId, "on", screenValue)
+                 }
+@@ -1035,6 +1359,81 @@
+     }
+ 
+     Component {
++        id: handoverComponent
++        Timer {
++            id: transition
++            property string outputKey: ""
++            property var previous: null
++            property var candidate: null
++            property var previousSig: null
++            property double previousStarted: 0
++            property int attempts: 0
++            interval: 16
++            repeat: true
++            function stopPrevious() {
++                if (!previous) return
++                const pid = previous.processId
++                if (pid > 0) Quickshell.execDetached(["kill", String(pid)])
++                previous.running = false
++                previous.destroy()
++                previous = null
++            }
++            function cancel() {
++                running = false
++                probe.running = false
++                stopPrevious()
++                delete root.handovers[outputKey]
++                delete root.pendingLaunches[outputKey]
++                destroy()
++            }
++            function finish(success) {
++                running = false
++                delete root.handovers[outputKey]
++                delete root.pendingLaunches[outputKey]
++                if (success && candidate && root.processes[outputKey] === candidate) {
++                    if (root.cacheEnabled && previous && root.cacheScenes.includes(previous.sceneId)) {
++                        previous.cacheReady = true
++                        root.cacheRenderers[root.cacheKey(outputKey,previous.sceneId)] = previous
++                        Quickshell.execDetached(["@HOME@/.local/bin/wallpaper-cache-control", "park", String(previous.processId)])
++                        previous = null
++                        root.cacheRevision++
++                    } else stopPrevious()
++                    root.promotedActivePid = candidate.processId
++                    console.info("LinuxWallpaperEngine: Seamless handover ready for", outputKey)
++                    syncDebounce.restart()
++                } else {
++                    if (candidate && root.processes[outputKey] === candidate) {
++                        delete root.processes[outputKey]
++                        candidate.running = false
++                        candidate.destroy()
++                    }
++                    if (root.ready && previous && previous.running) {
++                        root.processes[outputKey] = previous
++                        root.launchSignatures[outputKey] = previousSig
++                        root.processStartTimes[outputKey] = previousStarted
++                        previous = null
++                    } else stopPrevious()
++                    console.warn("LinuxWallpaperEngine: New scene did not become ready; retained the previous live wallpaper")
++                    Quickshell.execDetached(["dms", "ipc", "call", "toast", "error", "Live wallpaper could not load. Previous wallpaper kept."])
++                }
++                destroy()
++            }
++            onTriggered: {
++                if (!root.ready) { cancel(); return }
++                attempts++
++                if (candidate && candidate.processId > 0) {
++                    running = false
++                    probe.command = ["@HOME@/.local/bin/wallpaper-cache-control", "promote", String(candidate.processId)]
++                    probe.running = true
++                } else if (attempts > 60) finish(false)
++            }
++            property Process probe: Process {
++                onExited: (code) => transition.finish(code === 0)
++            }
++        }
++    }
++
++    Component {
+         id: killerComponent
+ 
+         Process {
+@@ -1124,7 +1523,7 @@
+ 
+     Component.onCompleted: {
+         prevGenerateStaticWallpaper = generateStaticWallpaper
+-        ready = true
++        ready = pluginData.wallpaperModeOn !== false
+         console.info("LinuxWallpaperEngine: Plugin starting...")
+         discoverSteamPath()
+         Utils.ensureNamedPlaylists(store())
+--- a/js/CommandBuilder.js
++++ b/js/CommandBuilder.js
+@@ -1,5 +1,5 @@
+ function buildCommandArgs(o) {
+-    var args = ["linux-wallpaperengine"]
++    var args = ["@HOME@/.local/bin/wallpaper-ram-launch"]
+ 
+     if (o.assetsDir) {
+         args.push("--assets-dir")

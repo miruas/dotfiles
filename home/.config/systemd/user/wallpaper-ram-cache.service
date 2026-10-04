@@ -1,0 +1,14 @@
+[Unit]
+Description=RAM-only wallpaper source cache
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+ExecStart=%h/.local/bin/wallpaper-ram-cache
+Restart=on-failure
+RestartSec=3
+UMask=0077
+Nice=10
+
+[Install]
+WantedBy=graphical-session.target

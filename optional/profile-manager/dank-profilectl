@@ -1,0 +1,22 @@
+#!/usr/bin/python
+import json, socket, sys
+args=sys.argv[1:]
+if args == ['status']:
+    request={'op':'status'}
+elif len(args)==2 and args[0] in ['fan','performance']:
+    request={'op':args[0],'value':args[1]}
+else:
+    print(json.dumps({'ok':False,'error':'Usage: dank-profilectl status | fan silent/turbo/bios | performance low/max'}))
+    sys.exit(2)
+try:
+    with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as sock:
+        sock.settimeout(40)
+        sock.connect('/run/dank-profile-manager/control.sock')
+        sock.sendall((json.dumps(request)+'\n').encode())
+        response=sock.makefile('r').readline(16384)
+        result=json.loads(response)
+        print(json.dumps(result))
+        sys.exit(0 if result.get('ok') else 1)
+except Exception as exc:
+    print(json.dumps({'ok':False,'error':'Profile service unavailable: '+str(exc)}))
+    sys.exit(1)

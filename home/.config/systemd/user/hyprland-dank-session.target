@@ -1,0 +1,5 @@
+[Unit]
+Description=Graphical session lifecycle for direct Hyprland login
+Requires=graphical-session.target
+After=graphical-session.target
+BindsTo=graphical-session.target

@@ -1,0 +1,5 @@
+#!/bin/sh
+if [ -x "@HOME@/.local/opt/video-trimmer-selected/video-trimmer" ]; then
+    exec "@HOME@/.local/opt/video-trimmer-selected/video-trimmer" "$@"
+fi
+exec /usr/bin/video-trimmer "$@"

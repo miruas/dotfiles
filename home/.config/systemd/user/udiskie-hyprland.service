@@ -1,0 +1,11 @@
+[Unit]
+Description=Removable drive automount for Hyprland
+PartOf=graphical-session.target
+After=graphical-session.target
+Requisite=graphical-session.target
+
+[Service]
+ExecCondition=/bin/sh -c 'case "$XDG_CURRENT_DESKTOP" in *Hyprland*) exit 0;; *) exit 1;; esac'
+ExecStart=/usr/bin/udiskie --no-tray
+Restart=on-failure
+RestartSec=3

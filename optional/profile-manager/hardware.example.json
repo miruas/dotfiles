@@ -1,0 +1,18 @@
+{
+  "uid": 1000,
+  "gid": 1000,
+  "board_uid": "REPLACE_WITH_LOCAL_COOLERCONTROL_DEVICE_UID",
+  "fan_channel": "fan5",
+  "pump_channel": "fan1",
+  "fan_hwmon": "REPLACE_WITH_LOCAL_HWMON_NAME",
+  "cpu_hwmon": "k10temp",
+  "fan_modes": {
+    "silent": "Silent",
+    "turbo": "Turbo",
+    "bios": "BIOS Controlled"
+  },
+  "low_cpu_khz": 3000000,
+  "low_gpu_watts": 90,
+  "low_gpu_min_mhz": 210,
+  "low_gpu_max_mhz": 1500
+}

@@ -1,0 +1,69 @@
+#!/usr/bin/python3
+"""Allow GPU wallpaper prewarming only with spare VRAM and no local AI runtime."""
+import json,os,re,signal,subprocess,time,xml.etree.ElementTree as ET
+from pathlib import Path
+STATE=Path.home()/'.local/state/theme-manager/gpu-cache.json'
+ESTIMATE=STATE.with_name('gpu-cache-cost.json')
+LIMIT=4096;RESUME=3840;DEFAULT_COST=2304
+
+def decide(used,cached,cost,ai,ram_pressure,previous):
+ if ai:return False,'AI runtime running'
+ if ram_pressure:return False,'RAM pressure'
+ if used is None:return False,'VRAM reading unavailable'
+ if used>LIMIT:return False,'VRAM above 4 GiB'
+ # Including our own allocation in the recovery test would cause reload/evict loops.
+ projected=max(0,used-cached)+cost
+ budget=LIMIT-64 if previous else RESUME
+ if projected>budget:return False,'Insufficient VRAM for prepared scenes'
+ return True,'VRAM budget available'
+def ai_running():
+ names=set()
+ for p in Path('/proc').iterdir():
+  if not p.name.isdigit():continue
+  try:
+   comm=(p/'comm').read_text().strip().lower()
+   try:exe=Path(os.readlink(p/'exe')).name.lower()
+   except OSError:exe=''
+   if comm.startswith('ollama') or exe.startswith('ollama'):names.add('Ollama')
+   if any(re.search(r'lm[ _-]?studio|llmster',n,re.I) for n in [comm,exe]):names.add('LM Studio')
+  except (OSError,UnicodeError):continue
+ return sorted(names)
+def gpu_memory():
+ tree=ET.fromstring(subprocess.check_output(['nvidia-smi','-q','-x'],text=True,timeout=2))
+ gpu=tree.find('gpu');used=int(gpu.findtext('fb_memory_usage/used').split()[0])
+ processes={}
+ for p in gpu.findall('processes/process_info'):
+  value=p.findtext('used_memory','N/A')
+  if value[0].isdigit():processes[int(p.findtext('pid'))]=int(value.split()[0])
+ return used,processes
+def atomic(data):
+ STATE.parent.mkdir(parents=True,exist_ok=True)
+ tmp=STATE.with_suffix('.tmp');tmp.write_text(json.dumps(data));os.chmod(tmp,0o600);tmp.replace(STATE)
+def main():
+ stop=False;allowed=False;cost=DEFAULT_COST
+ try:cost=max(128,int(json.loads(ESTIMATE.read_text())['mib']))
+ except (OSError,ValueError,KeyError):pass
+ def finish(*a):
+  nonlocal stop;stop=True
+ signal.signal(signal.SIGTERM,finish);signal.signal(signal.SIGINT,finish)
+ while not stop:
+  try:
+   ai=ai_running()
+   used,pids=gpu_memory()
+   try:
+    status=json.loads(subprocess.check_output(['dms','ipc','call','linuxWallpaperEngine','cacheStatus'],text=True,timeout=2,stderr=subprocess.DEVNULL))
+   except (OSError,ValueError,subprocess.SubprocessError):status={}
+   cached=sum(pids.get(int(pid),0) for pid in status.get('cachedPids',[]))
+   if status.get('total',0)>1 and status.get('ready')==status.get('total') and not status.get('warming') and not status.get('switches') and cached:
+    cost=cached
+    ESTIMATE.write_text(json.dumps({'mib':cost,'time':time.time()}))
+   ram=json.loads((STATE.parent/'ram-cache.json').read_text())
+   allowed,reason=decide(used,cached,cost,ai,ram.get('pressure',False),allowed)
+   atomic({'allowed':allowed,'reason':reason,'ai':ai,'usedMiB':used,'cachedMiB':cached,'estimatedCacheMiB':cost,'releaseAboveMiB':LIMIT,'resumeBudgetMiB':RESUME,'time':time.time()})
+  except Exception as e:
+   allowed=False;atomic({'allowed':False,'reason':'Monitoring unavailable','error':str(e),'time':time.time()})
+  for _ in range(20):
+   if stop:break
+   time.sleep(.1)
+ atomic({'allowed':False,'reason':'Monitor stopped','time':time.time()})
+if __name__=='__main__':main()

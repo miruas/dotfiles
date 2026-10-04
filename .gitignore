@@ -1,0 +1,14 @@
+staged-home/
+.cache/
+__pycache__/
+*.pyc
+*.so
+*.log
+*.token
+.env
+state.json
+baseline.json
+hardware.json
+build/
+target/
+wallpapers/

@@ -1,0 +1,11 @@
+[Extension]
+Name=Video Trimmer Bridge
+Comment=Trim the current video and close only its viewer window
+Authors=Dotfiles contributors
+Version=1.0
+Icon=edit-cut-symbolic
+Category=Viewer
+
+[Loader]
+Type=module
+API=3.12

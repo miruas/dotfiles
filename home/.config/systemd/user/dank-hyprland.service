@@ -1,0 +1,15 @@
+[Unit]
+Description=Dank shell for the Hyprland session
+PartOf=graphical-session.target
+After=graphical-session.target
+Requisite=graphical-session.target
+
+[Service]
+Type=dbus
+BusName=org.freedesktop.Notifications
+ExecCondition=/bin/sh -c 'case "$XDG_CURRENT_DESKTOP" in *Hyprland*) exit 0;; *) exit 1;; esac'
+ExecStart=/usr/bin/dms run --session
+Restart=on-failure
+RestartSec=2
+TimeoutStartSec=90
+TimeoutStopSec=10

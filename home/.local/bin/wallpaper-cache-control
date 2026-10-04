@@ -1,0 +1,44 @@
+#!/usr/bin/python3
+"""Promote a prepared renderer or park it; no image capture is performed."""
+import json,os,signal,subprocess,sys,time
+mode=sys.argv[1];pids=[int(x) for x in sys.argv[2].split(',') if x];env=os.environ.copy()
+if not env.get('HYPRLAND_INSTANCE_SIGNATURE'):
+ env['HYPRLAND_INSTANCE_SIGNATURE']=json.loads(subprocess.check_output(['hyprctl','instances','-j'],text=True))[0]['instance']
+def layers():
+ data=json.loads(subprocess.check_output(['hyprctl','layers','-j'],text=True,env=env,timeout=1,stderr=subprocess.DEVNULL))
+ return {int(x.get('pid',0)):int(level) for out in data.values() for level,items in out.get('levels',{}).items() for x in items if x.get('namespace')=='linux-wallpaperengine' and x.get('w',0)>0}
+def stopped(pid):
+ try:return '\nState:\tT' in open('/proc/'+str(pid)+'/status').read()
+ except OSError:return False
+try:
+ for pid in pids:
+  deadline=time.monotonic()+15
+  if mode in ['promote','pair']:
+   # A cold renderer must commit its first buffer before it can be selected.
+   while not os.path.exists(env.get('XDG_RUNTIME_DIR','/run/user/'+str(os.getuid()))+'/lwe-ready-'+str(pid)) or pid not in layers():
+    if not os.path.exists('/proc/'+str(pid)) or time.monotonic()>deadline:sys.exit(2)
+    time.sleep(.01)
+   os.kill(pid,signal.SIGUSR2);os.kill(pid,signal.SIGCONT)
+   while layers().get(pid)!=1:
+    if time.monotonic()>deadline:sys.exit(2)
+    time.sleep(.003)
+  elif mode=='lower':
+   os.kill(pid,signal.SIGWINCH)
+   while layers().get(pid)!=0:
+    if time.monotonic()>deadline:sys.exit(2)
+    time.sleep(.003)
+  elif mode in ['park','prepare']:
+   if mode=='prepare':
+    while not os.path.exists(env.get('XDG_RUNTIME_DIR','/run/user/'+str(os.getuid()))+'/lwe-ready-'+str(pid)) or pid not in layers():
+     if not os.path.exists('/proc/'+str(pid)) or time.monotonic()>deadline:sys.exit(2)
+     time.sleep(.01)
+   os.kill(pid,signal.SIGUSR1)
+   while not stopped(pid):
+    if not os.path.exists('/proc/'+str(pid)) or time.monotonic()>deadline:sys.exit(2)
+    time.sleep(.005)
+ if mode=='pair' and len(sys.argv)>3:
+  old=int(sys.argv[3]);os.kill(old,signal.SIGUSR1)
+  while not stopped(old):
+   if time.monotonic()>deadline:sys.exit(2)
+   time.sleep(.005)
+except (OSError,ValueError,subprocess.SubprocessError):sys.exit(2)
