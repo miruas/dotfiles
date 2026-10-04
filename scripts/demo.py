@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A 28-second desktop showcase with live terminal colors and window choreography."""
+"""A 29-second desktop showcase with a normal terminal, Firefox and Mission Center."""
 import argparse
 import fcntl
 import os
@@ -12,7 +12,7 @@ import time
 
 HOME=Path.home()
 THEMES=HOME/'.config/theme-manager'
-TIMELINE=[(0,'First themed terminal'),(.7,'Second tiled terminal'),(1.4,'Third tiled terminal'),(2,'Animated theme gallery'),(3,'Purple: shell and all terminals'),(5,'Yellow: shell and all terminals'),(7,'Red: shell and all terminals'),(9,'Blue: shell and all terminals'),(11,'Rearrange the tiled windows'),(12,'Rotate the split'),(13,'Float and center the third terminal'),(14,'Move and resize the floating terminal'),(15,'Return the terminal to tiling'),(16,'Fullscreen the first terminal'),(17,'Restore the tiled layout'),(18,'Floating theme settings'),(20,'Cooling and performance card'),(23,'Wallpaper picker'),(25,'Return to the theme gallery'),(26,'Black/white closing palette'),(28,'Restore theme and workspace')]
+TIMELINE=[(0,'Normal Super+T terminal'),(.8,'Firefox website window'),(1.6,'Mission Center'),(3,'Animated theme gallery'),(4,'Purple: shell and terminal'),(6,'Yellow: shell and terminal'),(8,'Red: shell and terminal'),(10,'Blue: shell and terminal'),(12,'Rearrange the application windows'),(13,'Rotate the split'),(14,'Float and center Mission Center'),(15,'Move and resize Mission Center'),(16,'Return Mission Center to tiling'),(17,'Fullscreen Firefox'),(18,'Restore the tiled layout'),(19,'Floating theme settings'),(21,'Cooling and performance card'),(24,'Wallpaper picker'),(26,'Return to the theme gallery'),(27,'Black/white closing palette'),(29,'Restore theme and workspace')]
 
 
 def call(*args,timeout=3):
@@ -23,32 +23,18 @@ def ipc(*args):return call('dms','ipc','call',*args)
 def clients():return json.loads(call('hyprctl','clients','-j'))
 def workspace(value):
     call('hyprctl','eval',f'hl.dispatch(hl.dsp.focus({{workspace = {int(value)}}}))')
-def terminal_panel(kind):
-    blocks={
-        'overview':('HYPRLAND + DANK',['Animated island','12 coordinated palettes','Still + live wallpapers','Adaptive RAM / VRAM cache','Cooling + performance card']),
-        'workflow':('KEYBOARD WORKFLOW',['Super + T        Terminal','Super + Alt + T  Themes','Super + B        Control Center','Super + W        Live wallpapers','Super + arrows   Focus','Shift + arrows   Arrange']),
-        'palette':('LIVE COLOR SYNC',['One palette, one desktop.','','Shell / window borders','Terminal background / text','ANSI palette / selection','','No terminal restart needed.']),
-    }
-    title,lines=blocks[kind]
-    print('\033[2J\033[H\n\033[1;36m  '+title+'\033[0m\n  '+('─'*32)+'\n')
-    for line in lines:print('  '+line)
-    print('\n  '+''.join('\033['+str(c)+'m● ● \033[0m ' for c in range(31,37)),flush=True)
-    time.sleep(90)
-
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--terminal-panel',choices=['overview','workflow','palette'],help=argparse.SUPPRESS)
+    parser.add_argument('--url',default=os.environ.get('DOTFILES_DEMO_URL','https://example.org'),help='Website opened in a new Firefox window')
     parser.add_argument('--dry-run',action='store_true',help='Print the timeline without changing the desktop')
-    parser.add_argument('--countdown',type=int,default=5,help='Lead-in before the 28-second showcase')
+    parser.add_argument('--countdown',type=int,default=5,help='Lead-in before the 29-second showcase')
     args=parser.parse_args()
-    if args.terminal_panel:
-        terminal_panel(args.terminal_panel)
-        return
     if args.dry_run:
         for at,label in TIMELINE:print(f'{at:04.1f}s  {label}')
         return
-    for name in ['dms','hyprctl','alacritty']:
+    for name in ['dms','hyprctl','alacritty','firefox','missioncenter']:
         if not shutil.which(name):parser.error(f'Missing command: {name}')
+    if not args.url.startswith(('https://','http://')):parser.error('Use an HTTP or HTTPS website URL')
     lock_path=Path(os.environ.get('XDG_RUNTIME_DIR',str(HOME/'.cache')))/'dotfiles-demo.lock'
     lock_path.parent.mkdir(parents=True,exist_ok=True)
     lock_file=lock_path.open('w')
@@ -64,11 +50,21 @@ def main():
     if any(c.get('class','').startswith('local.') and c.get('class','').endswith('.ThemeManager') for c in current_clients):
         parser.error('Close the existing theme settings window before the showcase')
     original_windows={c['address'] for c in current_clients}
-    allowed={'DotfilesDemo','local.dotfiles.ThemeManager'}
+    role_addresses={}
+    def role_for(c):
+        cls=c.get('class','').lower()
+        if cls in ['alacritty','org.alacritty.alacritty']:return 'terminal'
+        if 'firefox' in cls:return 'browser'
+        if cls in ['missioncenter','io.missioncenter.missioncenter.demo']:return 'monitor'
+        if cls.startswith('local.') and cls.endswith('.thememanager'):return 'settings'
+        return None
     # Match the existing pre-export installation as well, without embedding a user name.
     def owned(c):
         cls=c.get('class','')
-        return c['address'] not in original_windows and c.get('workspace',{}).get('id')==demo_workspace and (cls in allowed or (cls.startswith('local.') and cls.endswith('.ThemeManager')))
+        if c['address'] in original_windows or c.get('workspace',{}).get('id')!=demo_workspace:return False
+        role=role_for(c)
+        if role and role not in role_addresses:role_addresses[role]=c['address']
+        return role is not None and role_addresses.get(role)==c['address']
     processes=[]
     def launch(*command):
         p=subprocess.Popen(command,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,start_new_session=True)
@@ -76,41 +72,52 @@ def main():
         return p
     def close_demo_windows(settings_only=False):
         for c in clients():
-            if owned(c) and (not settings_only or c.get("class")!="DotfilesDemo"):
+            if owned(c) and (not settings_only or role_for(c)=='settings'):
                 selector=json.dumps('address:'+c['address'])
                 call('hyprctl','eval','hl.dispatch(hl.dsp.window.close({window = '+selector+'}))')
     def theme(name):
         reply=ipc('themeGallery','apply',name)
         if reply!='SUBMITTED':print(f'Skipped {name}: {reply}',file=sys.stderr)
-    def panel(kind):
-        launch('alacritty','--class','DotfilesDemo','--title','Dank / '+kind.title(),
-               '--config-file',str(HOME/'.config/hypr/terminal.toml'),
-               '-o','general.live_config_reload=true','-e',sys.executable,str(Path(__file__).resolve()),'--terminal-panel',kind)
-    def manipulate(index,body):
-        windows=[c for c in clients() if owned(c) and c.get('class')=='DotfilesDemo']
-        windows.sort(key=lambda c:c.get('pid',0))
-        if index>=len(windows):raise RuntimeError('Demo terminal is not ready')
-        selector=json.dumps('address:'+windows[index]['address'])
+    def app(role,*command):
+        launch(*command)
+        deadline=time.monotonic()+2
+        while time.monotonic()<deadline:
+            for c in clients():
+                if c['address'] in original_windows or role_for(c)!=role:continue
+                role_addresses[role]=c['address']
+                if c.get('workspace',{}).get('id')!=demo_workspace:
+                    selector=json.dumps('address:'+c['address'])
+                    call('hyprctl','eval','local w=hl.get_window('+selector+'); if w then hl.dispatch(hl.dsp.window.move({window=w,workspace='+str(demo_workspace)+'})) end')
+                workspace(demo_workspace)
+                return
+            time.sleep(.05)
+        raise RuntimeError(f'Demo {role} did not open in time')
+    def normal_terminal():
+        app('terminal',str(HOME/'.config/hypr/launch-app.sh'),'alacritty','--config-file',str(HOME/'.config/hypr/terminal.toml'))
+    def manipulate(role,body):
+        windows=[c for c in clients() if owned(c) and role_for(c)==role]
+        if not windows:raise RuntimeError(f'Demo {role} window is not ready')
+        selector=json.dumps('address:'+windows[0]['address'])
         code='local w = hl.get_window('+selector+'); if w then '+body+' end'
         call('hyprctl','eval',code)
     actions={
-        0:lambda:(workspace(demo_workspace),panel('overview')),
-        .7:lambda:panel('workflow'),
-        1.4:lambda:panel('palette'),
-        2:lambda:ipc('island','open','themes'),
-        3:lambda:theme('purple'),5:lambda:theme('yellow'),7:lambda:theme('red'),9:lambda:theme('blue'),
-        11:lambda:(ipc('island','close'),manipulate(1,'hl.dispatch(hl.dsp.focus({window=w})); hl.dispatch(hl.dsp.window.move({window=w,direction="left"}))')),
-        12:lambda:manipulate(1,'hl.dispatch(hl.dsp.focus({window=w})); hl.dispatch(hl.dsp.layout("togglesplit"))'),
-        13:lambda:manipulate(2,'hl.dispatch(hl.dsp.window.float({window=w,action="set"})); hl.dispatch(hl.dsp.window.resize({window=w,x=800,y=480})); hl.dispatch(hl.dsp.window.center({window=w})); hl.dispatch(hl.dsp.focus({window=w}))'),
-        14:lambda:manipulate(2,'hl.dispatch(hl.dsp.window.move({window=w,x=100,y=120})); hl.dispatch(hl.dsp.window.resize({window=w,x=960,y=560}))'),
-        15:lambda:manipulate(2,'hl.dispatch(hl.dsp.window.float({window=w,action="unset"}))'),
-        16:lambda:manipulate(0,'hl.dispatch(hl.dsp.window.fullscreen({window=w,mode="fullscreen",action="set"}))'),
-        17:lambda:manipulate(0,'hl.dispatch(hl.dsp.window.fullscreen({window=w,mode="fullscreen",action="unset"}))'),
-        18:lambda:launch(str(HOME/'.local/bin/theme-manager'),'--settings'),
-        20:lambda:(close_demo_windows(settings_only=True),ipc('island','open','controlcenter')),
-        23:lambda:ipc('island','open','wallpaper'),
-        25:lambda:ipc('island','open','themes'),
-        26:lambda:theme('black-white'),
+        0:lambda:(workspace(demo_workspace),normal_terminal()),
+        .8:lambda:app('browser','firefox','--new-window',args.url),
+        1.6:lambda:app('monitor','missioncenter','--app-id','io.missioncenter.MissionCenter.Demo'),
+        3:lambda:ipc('island','open','themes'),
+        4:lambda:theme('purple'),6:lambda:theme('yellow'),8:lambda:theme('red'),10:lambda:theme('blue'),
+        12:lambda:(ipc('island','close'),manipulate('browser','hl.dispatch(hl.dsp.focus({window=w})); hl.dispatch(hl.dsp.window.move({window=w,direction="left"}))')),
+        13:lambda:manipulate('browser','hl.dispatch(hl.dsp.focus({window=w})); hl.dispatch(hl.dsp.layout("togglesplit"))'),
+        14:lambda:manipulate('monitor','hl.dispatch(hl.dsp.window.float({window=w,action="set"})); hl.dispatch(hl.dsp.window.resize({window=w,x=800,y=480})); hl.dispatch(hl.dsp.window.center({window=w})); hl.dispatch(hl.dsp.focus({window=w}))'),
+        15:lambda:manipulate('monitor','hl.dispatch(hl.dsp.window.move({window=w,x=100,y=120})); hl.dispatch(hl.dsp.window.resize({window=w,x=960,y=560}))'),
+        16:lambda:manipulate('monitor','hl.dispatch(hl.dsp.window.float({window=w,action="unset"}))'),
+        17:lambda:manipulate('browser','hl.dispatch(hl.dsp.window.fullscreen({window=w,mode="fullscreen",action="set"}))'),
+        18:lambda:manipulate('browser','hl.dispatch(hl.dsp.window.fullscreen({window=w,mode="fullscreen",action="unset"}))'),
+        19:lambda:launch(str(HOME/'.local/bin/theme-manager'),'--settings'),
+        21:lambda:(close_demo_windows(settings_only=True),ipc('island','open','controlcenter')),
+        24:lambda:ipc('island','open','wallpaper'),
+        26:lambda:ipc('island','open','themes'),
+        27:lambda:theme('black-white'),
     }
     print('Start your recorder now. Ctrl+C cancels and restores the desktop.')
     try:
@@ -121,7 +128,7 @@ def main():
             print(f'{at:04.1f}s  {label}',flush=True)
             try:actions[at]()
             except (RuntimeError,subprocess.TimeoutExpired,ImportError) as exc:print(str(exc),file=sys.stderr)
-        time.sleep(max(0,start+28-time.monotonic()))
+        time.sleep(max(0,start+29-time.monotonic()))
     except KeyboardInterrupt:pass
     finally:
         try:ipc('island','close');close_demo_windows()
